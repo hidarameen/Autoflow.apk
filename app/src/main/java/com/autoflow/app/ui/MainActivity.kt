@@ -38,7 +38,7 @@ import com.autoflow.app.engine.AutoFlowForegroundService
 import com.autoflow.app.engine.RuleEngine
 import com.autoflow.app.ui.screen.HomeScreen
 import com.autoflow.app.ui.screen.LogScreen
-import com.autoflow.app.ui.screen.RuleEditorScreen
+import com.autoflow.app.ui.screen.RuleWizardScreen
 import com.autoflow.app.ui.screen.TemplatesScreen
 import com.autoflow.app.ui.theme.AppColors
 import com.autoflow.app.ui.theme.AutoFlowTheme
@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
         val logs by viewModel.logs.collectAsStateWithLifecycle()
 
         when (val current = destination) {
-            is Destination.Editor -> RuleEditorScreen(
+            is Destination.Editor -> RuleWizardScreen(
                 existing = current.rule,
                 apps = viewModel.apps,
                 onSave = {

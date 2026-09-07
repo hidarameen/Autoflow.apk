@@ -147,6 +147,32 @@ sealed interface TriggerSpec {
     @SerialName("manual")
     data object Manual : TriggerSpec
 
+    /**
+     * A new message was read directly off a chat screen, with no notification involved.
+     * Works while the conversation is open — including when notifications are disabled.
+     */
+    /**
+     * A message reached a Telegram bot. Polled over HTTPS, so it works with the screen off
+     * and does not need the Telegram app installed at all.
+     */
+    @Serializable
+    @SerialName("telegram_bot")
+    data class TelegramBot(
+        val token: String = "",
+        /** Numeric chat id. Stable across renames, unlike the sender name. Blank = any. */
+        val chatId: String = "",
+        val sender: MatchSpec = MatchSpec.ANY,
+        val text: MatchSpec = MatchSpec.ANY,
+    ) : TriggerSpec
+
+    @Serializable
+    @SerialName("chat_message")
+    data class ChatMessage(
+        val packageNames: List<String> = emptyList(),
+        val sender: MatchSpec = MatchSpec.ANY,
+        val text: MatchSpec = MatchSpec.ANY,
+    ) : TriggerSpec
+
     // ---- App-Specific Triggers ------------------------------------------
 
     @Serializable
@@ -222,6 +248,16 @@ val TriggerSpec.label: String
         TriggerSpec.Shake -> "Device is shaken"
         TriggerSpec.QuickTile -> "Quick Settings tile tapped"
         TriggerSpec.Manual -> "Manual run only"
+        is TriggerSpec.TelegramBot -> buildString {
+            append("Telegram bot receives a message")
+            if (chatId.isNotBlank()) append(" in chat $chatId")
+            if (sender.isFilter) append(", from ${sender.label}")
+            if (text.isFilter) append(", body ${text.label}")
+        }
+        is TriggerSpec.ChatMessage -> {
+            val from = if (packageNames.isEmpty()) "any chat app" else packageNames.joinToString()
+            "New on-screen message in $from"
+        }
         is TriggerSpec.WhatsAppMessage -> "WhatsApp message from ${if (sender.isFilter) sender.label else "anyone"}"
         is TriggerSpec.TelegramMessage -> "Telegram message from ${if (sender.isFilter) sender.label else "anyone"}"
         is TriggerSpec.InstagramNotification -> "Instagram notification from ${if (sender.isFilter) sender.label else "anyone"}"

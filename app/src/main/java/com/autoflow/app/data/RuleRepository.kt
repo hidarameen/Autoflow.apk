@@ -15,6 +15,8 @@ class RuleRepository(context: Context) {
 
     suspend fun enabledRules(): List<Rule> = rules.enabledRules()
 
+    suspend fun anyRules(): Boolean = rules.count() > 0
+
     suspend fun rule(id: Long): Rule? = rules.byId(id)
 
     suspend fun ruleByName(name: String): Rule? = rules.byName(name)

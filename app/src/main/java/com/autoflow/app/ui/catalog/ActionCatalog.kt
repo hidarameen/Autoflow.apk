@@ -28,6 +28,7 @@ data class ActionDef(
 object ActionCatalog {
 
     private val timeout = FieldDef("timeoutMs", "Timeout (ms)", FieldType.NUMBER)
+    private val labelField = FieldDef("label", "Label (optional)", FieldType.TEXT, "Friendly name shown in the step list")
 
     val all: List<ActionDef> = listOf(
 
@@ -260,6 +261,7 @@ object ActionCatalog {
                 FieldDef("text", "Text", FieldType.TEXT),
                 FieldDef("exact", "Exact match", FieldType.BOOL),
                 timeout,
+                labelField,
             ),
             create = { ActionSpec.ClickText() },
             read = {
@@ -268,6 +270,7 @@ object ActionCatalog {
                         "text" to a.text,
                         "exact" to a.exact.toString(),
                         "timeoutMs" to a.timeoutMs.toString(),
+                        "label" to a.label,
                     )
                 }
             },
@@ -276,6 +279,7 @@ object ActionCatalog {
                     text = Fields.text(v, "text"),
                     exact = Fields.bool(v, "exact", false),
                     timeoutMs = Fields.long(v, "timeoutMs", 8_000),
+                    label = Fields.text(v, "label"),
                 )
             },
         ),
@@ -287,6 +291,7 @@ object ActionCatalog {
                 FieldDef("text", "Text", FieldType.TEXT),
                 FieldDef("exact", "Exact match", FieldType.BOOL),
                 timeout,
+                labelField,
             ),
             create = { ActionSpec.LongClickText() },
             read = {
@@ -295,6 +300,7 @@ object ActionCatalog {
                         "text" to a.text,
                         "exact" to a.exact.toString(),
                         "timeoutMs" to a.timeoutMs.toString(),
+                        "label" to a.label,
                     )
                 }
             },
@@ -303,6 +309,7 @@ object ActionCatalog {
                     text = Fields.text(v, "text"),
                     exact = Fields.bool(v, "exact", false),
                     timeoutMs = Fields.long(v, "timeoutMs", 8_000),
+                    label = Fields.text(v, "label"),
                 )
             },
         ),
@@ -311,17 +318,22 @@ object ActionCatalog {
             title = "Tap by content description",
             category = "Screen",
             help = "Icons usually have no visible text but do have a description, e.g. Send.",
-            fields = listOf(FieldDef("description", "Description", FieldType.TEXT), timeout),
+            fields = listOf(FieldDef("description", "Description", FieldType.TEXT), timeout, labelField),
             create = { ActionSpec.ClickDescription() },
             read = {
                 (it as ActionSpec.ClickDescription).let { a ->
-                    mapOf("description" to a.description, "timeoutMs" to a.timeoutMs.toString())
+                    mapOf(
+                        "description" to a.description,
+                        "timeoutMs" to a.timeoutMs.toString(),
+                        "label" to a.label,
+                    )
                 }
             },
             write = { _, v ->
                 ActionSpec.ClickDescription(
                     description = Fields.text(v, "description"),
                     timeoutMs = Fields.long(v, "timeoutMs", 8_000),
+                    label = Fields.text(v, "label"),
                 )
             },
         ),
@@ -330,15 +342,23 @@ object ActionCatalog {
             title = "Tap by view id",
             category = "Screen",
             help = "Find ids with Layout Inspector. The short form after the slash also works.",
-            fields = listOf(FieldDef("viewId", "View id", FieldType.TEXT), timeout),
+            fields = listOf(FieldDef("viewId", "View id", FieldType.TEXT), timeout, labelField),
             create = { ActionSpec.ClickViewId() },
             read = {
                 (it as ActionSpec.ClickViewId).let { a ->
-                    mapOf("viewId" to a.viewId, "timeoutMs" to a.timeoutMs.toString())
+                    mapOf(
+                        "viewId" to a.viewId,
+                        "timeoutMs" to a.timeoutMs.toString(),
+                        "label" to a.label,
+                    )
                 }
             },
             write = { _, v ->
-                ActionSpec.ClickViewId(Fields.text(v, "viewId"), Fields.long(v, "timeoutMs", 8_000))
+                ActionSpec.ClickViewId(
+                    viewId = Fields.text(v, "viewId"),
+                    timeoutMs = Fields.long(v, "timeoutMs", 8_000),
+                    label = Fields.text(v, "label"),
+                )
             },
         ),
 
@@ -354,6 +374,7 @@ object ActionCatalog {
                 ),
                 FieldDef("selector", "Hint or view id", FieldType.TEXT),
                 timeout,
+                labelField,
             ),
             create = { ActionSpec.SetText() },
             read = {
@@ -363,6 +384,7 @@ object ActionCatalog {
                         "target" to a.target.name,
                         "selector" to a.selector,
                         "timeoutMs" to a.timeoutMs.toString(),
+                        "label" to a.label,
                     )
                 }
             },
@@ -372,6 +394,7 @@ object ActionCatalog {
                     target = Fields.enum(v, "target", TextFieldTarget.FIRST_EDITABLE),
                     selector = Fields.text(v, "selector"),
                     timeoutMs = Fields.long(v, "timeoutMs", 8_000),
+                    label = Fields.text(v, "label"),
                 )
             },
         ),
@@ -629,6 +652,43 @@ object ActionCatalog {
         ),
 
         ActionDef(
+            title = "Share media (photos or video)",
+            category = "Send",
+            help = "One file posts a single image or video; several produce an album. " +
+                "Paste content:// or file:// URIs separated by commas.",
+            fields = listOf(
+                FieldDef("packageName", "Share to", FieldType.APP),
+                FieldDef("text", "Caption", FieldType.MULTILINE),
+                FieldDef("mediaUris", "Media URIs, comma separated", FieldType.MULTILINE),
+                FieldDef("mimeType", "Type", FieldType.ENUM,
+                    options = listOf("image/*", "video/*", "*/*")),
+                FieldDef("activityClass", "Activity (optional, skips the chooser)", FieldType.TEXT),
+            ),
+            create = { ActionSpec.ShareMedia() },
+            read = {
+                (it as ActionSpec.ShareMedia).let { a ->
+                    mapOf(
+                        "packageName" to a.packageName,
+                        "text" to a.text,
+                        "mediaUris" to a.mediaUris.joinToString(","),
+                        "mimeType" to a.mimeType,
+                        "activityClass" to a.activityClass,
+                    )
+                }
+            },
+            write = { _, v ->
+                ActionSpec.ShareMedia(
+                    packageName = Fields.text(v, "packageName"),
+                    text = Fields.text(v, "text"),
+                    mediaUris = Fields.text(v, "mediaUris")
+                        .split(",").map { u -> u.trim() }.filter { u -> u.isNotEmpty() },
+                    mimeType = Fields.text(v, "mimeType", "image/*"),
+                    activityClass = Fields.text(v, "activityClass"),
+                )
+            },
+        ),
+
+        ActionDef(
             title = "Call an HTTP API",
             category = "Send",
             help = "Runs with the screen off and never breaks on a UI change. " +
@@ -665,6 +725,36 @@ object ActionCatalog {
                     body = Fields.text(v, "body"),
                     contentType = Fields.text(v, "contentType", "application/json"),
                     saveResponseTo = Fields.text(v, "saveResponseTo"),
+                )
+            },
+        ),
+
+        ActionDef(
+            title = "Reply through the notification",
+            category = "Send",
+            help = "Answers using the reply box the notification itself provides. Works with " +
+                "the screen off and locked, and never opens the app. Needs a per-sender " +
+                "notification that offers a reply action.",
+            fields = listOf(
+                FieldDef("message", "Reply text", FieldType.MULTILINE),
+                FieldDef("packageName", "App (blank = the one that triggered)", FieldType.APP),
+                FieldDef("sender", "Sender (blank = the one that triggered)", FieldType.TEXT),
+            ),
+            create = { ActionSpec.ReplyToNotification() },
+            read = {
+                (it as ActionSpec.ReplyToNotification).let { a ->
+                    mapOf(
+                        "message" to a.message,
+                        "packageName" to a.packageName,
+                        "sender" to a.sender,
+                    )
+                }
+            },
+            write = { _, v ->
+                ActionSpec.ReplyToNotification(
+                    message = Fields.text(v, "message", "{{text}}"),
+                    packageName = Fields.text(v, "packageName"),
+                    sender = Fields.text(v, "sender"),
                 )
             },
         ),
@@ -850,6 +940,17 @@ object ActionCatalog {
             category = "Flow",
             create = { ActionSpec.EndRepeat },
             write = { _, _ -> ActionSpec.EndRepeat },
+        ),
+
+        ActionDef(
+            title = "Ignore failures from here",
+            category = "Flow",
+            help = "Later steps that fail are logged and skipped instead of ending the rule. " +
+                "Use it around confirmations that only appear sometimes.",
+            fields = listOf(FieldDef("ignore", "Ignore failures", FieldType.BOOL)),
+            create = { ActionSpec.IgnoreErrors() },
+            read = { (it as ActionSpec.IgnoreErrors).let { a -> mapOf("ignore" to a.ignore.toString()) } },
+            write = { _, v -> ActionSpec.IgnoreErrors(Fields.bool(v, "ignore", true)) },
         ),
 
         ActionDef(

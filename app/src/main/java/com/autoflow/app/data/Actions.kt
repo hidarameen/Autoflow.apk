@@ -56,6 +56,8 @@ sealed interface ActionSpec {
         val text: String = "",
         val exact: Boolean = false,
         val timeoutMs: Long = 8_000,
+        /** Friendly name shown in the step list; blank falls back to a generated label. */
+        val label: String = "",
     ) : ActionSpec
 
     @Serializable
@@ -64,6 +66,7 @@ sealed interface ActionSpec {
         val text: String = "",
         val exact: Boolean = false,
         val timeoutMs: Long = 8_000,
+        val label: String = "",
     ) : ActionSpec
 
     @Serializable
@@ -71,11 +74,16 @@ sealed interface ActionSpec {
     data class ClickDescription(
         val description: String = "",
         val timeoutMs: Long = 8_000,
+        val label: String = "",
     ) : ActionSpec
 
     @Serializable
     @SerialName("click_id")
-    data class ClickViewId(val viewId: String = "", val timeoutMs: Long = 8_000) : ActionSpec
+    data class ClickViewId(
+        val viewId: String = "",
+        val timeoutMs: Long = 8_000,
+        val label: String = "",
+    ) : ActionSpec
 
     @Serializable
     @SerialName("set_text")
@@ -84,6 +92,7 @@ sealed interface ActionSpec {
         val target: TextFieldTarget = TextFieldTarget.FIRST_EDITABLE,
         val selector: String = "",
         val timeoutMs: Long = 8_000,
+        val label: String = "",
     ) : ActionSpec
 
     @Serializable
@@ -152,6 +161,39 @@ sealed interface ActionSpec {
         val variable: String = "match",
     ) : ActionSpec
 
+    /**
+     * Brings a conversation on screen so the chat reader can harvest it. This is what makes
+     * a scheduled "check my messages" rule possible without notifications.
+     */
+    /**
+     * Answers through the notification's own reply box. Works with the screen off and the
+     * device locked, and never opens the target app.
+     */
+    @Serializable
+    @SerialName("reply_notification")
+    data class ReplyToNotification(
+        val message: String = "{{text}}",
+        /** Blank uses the notification that started this rule. */
+        val packageName: String = "",
+        val sender: String = "",
+    ) : ActionSpec
+
+    @Serializable
+    @SerialName("open_chat")
+    data class OpenChat(
+        val packageName: String = "",
+        val contact: String = "",
+        val searchDescription: String = "Search",
+    ) : ActionSpec
+
+    /** Reads the messages currently on screen into a variable. */
+    @Serializable
+    @SerialName("read_chat")
+    data class ReadChat(
+        val variable: String = "messages",
+        val limit: Int = 10,
+    ) : ActionSpec
+
     @Serializable
     @SerialName("read_screen")
     data class ReadScreenText(val variable: String = "screen") : ActionSpec
@@ -161,6 +203,28 @@ sealed interface ActionSpec {
     @Serializable
     @SerialName("share_text")
     data class ShareText(val packageName: String = "", val text: String = "{{text}}") : ActionSpec
+
+    /**
+     * Shares text plus one or more media files. A single item uses ACTION_SEND; several use
+     * ACTION_SEND_MULTIPLE, which is what produces an album/carousel post on X.
+     */
+    @Serializable
+    @SerialName("share_media")
+    data class ShareMedia(
+        val packageName: String = "",
+        val text: String = "",
+        /** content:// or file:// URIs, comma separated in the editor. */
+        val mediaUris: List<String> = emptyList(),
+        val mimeType: String = "image/*",
+        /** Optional explicit component, e.g. X's composer, to skip the chooser. */
+        val activityClass: String = "",
+        /**
+         * Extra string extras for the intent. WhatsApp uses "jid"
+         * (<number>@s.whatsapp.net) to target one chat directly instead of showing its
+         * contact picker.
+         */
+        val extras: Map<String, String> = emptyMap(),
+    ) : ActionSpec
 
     @Serializable
     @SerialName("http")
@@ -247,6 +311,17 @@ sealed interface ActionSpec {
     @SerialName("end_repeat")
     data object EndRepeat : ActionSpec
 
+    /**
+     * Switches error handling for the steps that follow.
+     *
+     * Some confirmations only exist sometimes — WhatsApp shows a preview for media but
+     * sends plain text straight away — so a missing button there should not abort the rest
+     * of a multi-destination rule.
+     */
+    @Serializable
+    @SerialName("ignore_errors")
+    data class IgnoreErrors(val ignore: Boolean = true) : ActionSpec
+
     @Serializable
     @SerialName("stop_rule")
     data object StopRule : ActionSpec
@@ -318,11 +393,11 @@ val ActionSpec.label: String
         is ActionSpec.LaunchApp -> "Open $packageName"
         is ActionSpec.LaunchActivity -> "Open $packageName/$activityClass"
         is ActionSpec.OpenUrl -> "Open $url"
-        is ActionSpec.ClickText -> "Tap text \"$text\""
-        is ActionSpec.LongClickText -> "Long-press \"$text\""
-        is ActionSpec.ClickDescription -> "Tap \"$description\""
-        is ActionSpec.ClickViewId -> "Tap id $viewId"
-        is ActionSpec.SetText -> "Type \"$text\""
+        is ActionSpec.ClickText -> label.ifBlank { "Tap text \"$text\"" }
+        is ActionSpec.LongClickText -> label.ifBlank { "Long-press \"$text\"" }
+        is ActionSpec.ClickDescription -> label.ifBlank { "Tap \"$description\"" }
+        is ActionSpec.ClickViewId -> label.ifBlank { "Tap id $viewId" }
+        is ActionSpec.SetText -> label.ifBlank { "Type \"$text\"" }
         is ActionSpec.WaitForText -> "Wait for \"$text\""
         is ActionSpec.WaitForApp -> "Wait for $packageName"
         is ActionSpec.Scroll -> "Scroll ${direction.name.lowercase()}"
@@ -336,6 +411,11 @@ val ActionSpec.label: String
         is ActionSpec.SetVariable -> "Set {{$name}}"
         is ActionSpec.ExtractRegex -> "Extract /$pattern/ into {{$variable}}"
         is ActionSpec.ReadScreenText -> "Read screen into {{$variable}}"
+        is ActionSpec.ReplyToNotification -> "Reply via notification"
+        is ActionSpec.OpenChat -> "Open chat with ${contact.ifBlank { "…" }}"
+        is ActionSpec.ReadChat -> "Read chat into {{$variable}}"
+        is ActionSpec.ShareMedia ->
+            "Share ${mediaUris.size} media to ${packageName.ifBlank { "chooser" }}"
         is ActionSpec.ShareText -> "Share to ${packageName.ifBlank { "chooser" }}"
         is ActionSpec.HttpRequest -> "$method $url"
         is ActionSpec.SendSms -> "SMS to $to"
@@ -354,6 +434,8 @@ val ActionSpec.label: String
         ActionSpec.EndIf -> "End if"
         is ActionSpec.Repeat -> "Repeat $times times"
         ActionSpec.EndRepeat -> "End repeat"
+        is ActionSpec.IgnoreErrors ->
+            if (ignore) "Ignore failures from here" else "Stop on failure again"
         ActionSpec.StopRule -> "Stop this rule"
         is ActionSpec.RunRule -> "Run rule \"$ruleName\""
         is ActionSpec.Log -> "Log \"$message\""

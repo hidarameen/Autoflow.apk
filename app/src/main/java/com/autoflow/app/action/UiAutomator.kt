@@ -104,6 +104,20 @@ object UiAutomator {
         return parts.distinct().joinToString("\n")
     }
 
+    /**
+     * Taps the centre of [node] with a real gesture.
+     *
+     * Needed because a list row often carries its label on a child that no clickable
+     * ancestor wraps — common in RecyclerView rows and in Compose, where the accessibility
+     * tree exposes text but not the click handler.
+     */
+    suspend fun tapNode(service: AccessibilityService, node: AccessibilityNodeInfo): Boolean {
+        val bounds = android.graphics.Rect()
+        node.getBoundsInScreen(bounds)
+        if (bounds.width() <= 0 || bounds.height() <= 0) return false
+        return dispatch(service, tapPath(bounds.centerX(), bounds.centerY()), durationMs = 60)
+    }
+
     fun setText(node: AccessibilityNodeInfo, text: String): Boolean {
         val arguments = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)

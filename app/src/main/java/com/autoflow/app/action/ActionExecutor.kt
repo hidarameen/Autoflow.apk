@@ -29,6 +29,7 @@ import com.autoflow.app.engine.ConditionEvaluator
 import com.autoflow.app.engine.RunContext
 import com.autoflow.app.engine.Variables
 import com.autoflow.app.trigger.AutoFlowAccessibilityService
+import com.autoflow.app.trigger.NotificationReplyStore
 import com.autoflow.app.util.KnownPackages
 import com.autoflow.app.util.Notifier
 import com.autoflow.app.util.Speaker
@@ -76,6 +77,8 @@ class ActionExecutor(
         val loops = ArrayDeque<Pair<Int, Int>>()
         var index = 0
         var guard = 0
+        // Steps run strictly by default; IgnoreErrors turns that off for a stretch.
+        var tolerant = false
 
         while (index < actions.size) {
             // A malformed rule must not spin forever.
@@ -116,10 +119,16 @@ class ActionExecutor(
 
                 ActionSpec.StopRule -> throw RuleStopped()
 
+                is ActionSpec.IgnoreErrors -> tolerant = action.ignore
+
                 else -> try {
                     execute(action, run)
                 } catch (failure: ActionFailure) {
-                    throw ActionFailure("Step ${index + 1} (${action::class.simpleName}): ${failure.message}")
+                    val where = "Step ${index + 1} (${action::class.simpleName}): ${failure.message}"
+                    // Carrying on matters most in a rule with several independent
+                    // destinations: one skipped confirmation must not cancel the rest.
+                    if (!tolerant) throw ActionFailure(where)
+                    run.set("_skipped", where)
                 }
             }
             index++
@@ -191,11 +200,15 @@ class ActionExecutor(
 
             is ActionSpec.ClickText -> {
                 val wanted = text(action.text)
+                // Skip editable fields: a search box holding the same text is not the
+                // result row we want to tap, and matching it silently does nothing.
                 val node = awaitNode(action.timeoutMs) {
-                    UiAutomator.matchesText(it, wanted, action.exact)
+                    !UiAutomator.isEditable(it) && UiAutomator.matchesText(it, wanted, action.exact)
                 } ?: throw ActionFailure("no view showing \"$wanted\"")
-                if (!UiAutomator.click(node)) {
-                    throw ActionFailure("\"$wanted\" was found but nothing around it is clickable")
+                // Many list rows (and most Compose UIs) expose text without marking any
+                // ancestor clickable, so fall back to tapping where the node actually is.
+                if (!UiAutomator.click(node) && !UiAutomator.tapNode(requireService(), node)) {
+                    throw ActionFailure("\"$wanted\" could not be tapped")
                 }
             }
 
@@ -212,14 +225,20 @@ class ActionExecutor(
                 val node = awaitNode(action.timeoutMs) {
                     it.contentDescription?.toString()?.contains(wanted, ignoreCase = true) == true
                 } ?: throw ActionFailure("no view described as \"$wanted\"")
-                if (!UiAutomator.click(node)) throw ActionFailure("\"$wanted\" is not clickable")
+                // Same fallback as tap-by-text: list rows often expose a description with
+                // no clickable ancestor, so tap where the node actually sits.
+                if (!UiAutomator.click(node) && !UiAutomator.tapNode(requireService(), node)) {
+                    throw ActionFailure("\"$wanted\" could not be tapped")
+                }
             }
 
             is ActionSpec.ClickViewId -> {
                 val node = awaitNode(action.timeoutMs) {
                     UiAutomator.matchesViewId(it, action.viewId)
                 } ?: throw ActionFailure("no view with id ${action.viewId}")
-                if (!UiAutomator.click(node)) throw ActionFailure("${action.viewId} is not clickable")
+                if (!UiAutomator.click(node) && !UiAutomator.tapNode(requireService(), node)) {
+                    throw ActionFailure("${action.viewId} could not be tapped")
+                }
             }
 
             is ActionSpec.SetText -> setText(action, run)
@@ -320,6 +339,37 @@ class ActionExecutor(
                 run.set(action.variable, result)
             }
 
+            is ActionSpec.ReplyToNotification -> {
+                val pkg = action.packageName.ifBlank { run.event.packageName }
+                val who = Variables.resolve(action.sender, run).ifBlank { run.event.title }
+                val body = text(action.message)
+
+                val entry = NotificationReplyStore.find(pkg, who)
+                    ?: throw ActionFailure(
+                        "no repliable notification from $pkg. The app may be collapsing " +
+                            "notifications, or it does not offer a reply action."
+                    )
+                if (!NotificationReplyStore.reply(context, entry, body)) {
+                    throw ActionFailure("$pkg refused the reply")
+                }
+            }
+
+            is ActionSpec.OpenChat -> openChat(action, run)
+
+            is ActionSpec.ReadChat -> {
+                val service = requireService()
+                val messages = ChatReader.readMessages(service.rootInActiveWindow)
+                    .takeLast(action.limit.coerceAtLeast(1))
+                run.set(
+                    action.variable,
+                    messages.joinToString(separator = "\n") { m ->
+                        if (m.sender.isBlank()) m.text else "${m.sender}: ${m.text}"
+                    },
+                )
+                run.set(action.variable + "_count", messages.size.toString())
+                run.set(action.variable + "_last", messages.lastOrNull()?.text.orEmpty())
+            }
+
             is ActionSpec.ReadScreenText -> {
                 val service = requireService()
                 val screen = UiAutomator.collectText(service.rootInActiveWindow)
@@ -334,6 +384,8 @@ class ActionExecutor(
                 }
                 startActivity(intent)
             }
+
+            is ActionSpec.ShareMedia -> shareMedia(action, run)
 
             is ActionSpec.HttpRequest -> performHttp(action, run)
 
@@ -550,8 +602,49 @@ class ActionExecutor(
 
             // Handled by the interpreter in run(); unreachable here.
             is ActionSpec.If, ActionSpec.Else, ActionSpec.EndIf,
-            is ActionSpec.Repeat, ActionSpec.EndRepeat, ActionSpec.StopRule -> Unit
+            is ActionSpec.Repeat, ActionSpec.EndRepeat, ActionSpec.StopRule,
+            is ActionSpec.IgnoreErrors -> Unit
         }
+    }
+
+    /**
+     * Brings a conversation on screen: launches the app, and when a contact is named uses
+     * the in-app search rather than a hard-coded chat position, which survives the list
+     * reordering as new messages arrive.
+     */
+    private suspend fun openChat(action: ActionSpec.OpenChat, run: RunContext) {
+        val contact = Variables.resolve(action.contact, run)
+        launchApp(action.packageName)
+
+        // The app needs to actually be foregrounded before its search box exists.
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            if (AutoFlowAccessibilityService.foregroundPackage == action.packageName) break
+            delay(200)
+        }
+        delay(1_200)
+
+        if (contact.isBlank()) return
+
+        val searchNode = UiAutomator.awaitNode(requireService(), 6_000) { node ->
+            node.contentDescription?.toString()
+                ?.contains(action.searchDescription, ignoreCase = true) == true
+        } ?: throw ActionFailure("could not find the search button in ${action.packageName}")
+
+        if (!UiAutomator.click(searchNode)) throw ActionFailure("search button did not respond")
+        delay(800)
+
+        val field = UiAutomator.awaitNode(requireService(), 5_000) { UiAutomator.isEditable(it) }
+            ?: throw ActionFailure("search field never appeared")
+        UiAutomator.setText(field, contact)
+        delay(1_400)
+
+        val result = UiAutomator.awaitNode(requireService(), 6_000) {
+            UiAutomator.matchesText(it, contact, exact = false)
+        } ?: throw ActionFailure("no chat matching \"$contact\"")
+
+        if (!UiAutomator.click(result)) throw ActionFailure("could not open the chat")
+        delay(1_500)
     }
 
     private suspend fun setText(action: ActionSpec.SetText, run: RunContext) {
@@ -582,6 +675,75 @@ class ActionExecutor(
         } ?: throw ActionFailure("no text field matched ${action.target}")
 
         if (!UiAutomator.setText(node, value)) throw ActionFailure("the field refused the text")
+    }
+
+    /**
+     * Hands media to another app. Several URIs become ACTION_SEND_MULTIPLE, which is how
+     * X and Instagram build a multi-image post; a single URI uses plain ACTION_SEND.
+     */
+    private fun shareMedia(action: ActionSpec.ShareMedia, run: RunContext) {
+        // A single "{{media}}" entry can resolve to several comma-separated URIs (a Telegram
+        // album), which then post as one carousel via ACTION_SEND_MULTIPLE.
+        val uris = action.mediaUris
+            .flatMap { Variables.resolve(it, run).split(",") }
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .map { Uri.parse(it) }
+        val body = Variables.resolve(action.text, run)
+
+        // A "forward as it arrived" rule points at {{media}}, which resolves to nothing for
+        // a text-only message. Falling back to a plain text share keeps one rule able to
+        // relay both kinds instead of failing on half of them.
+        if (uris.isEmpty()) {
+            if (body.isBlank()) throw ActionFailure("nothing to send: no media and no text")
+            val textOnly = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, body)
+                if (action.packageName.isNotBlank()) {
+                    if (action.activityClass.isNotBlank()) {
+                        component = ComponentName(action.packageName, action.activityClass)
+                    } else {
+                        setPackage(action.packageName)
+                    }
+                }
+            }
+            startActivity(textOnly)
+            return
+        }
+
+        val intent = if (uris.size == 1) {
+            Intent(Intent.ACTION_SEND).apply {
+                putExtra(Intent.EXTRA_STREAM, uris.first())
+            }
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+            }
+        }
+
+        // The rule may pass "{{media_type}}" so one rule forwards a photo, a video, a voice
+        // note or a PDF without the user picking a shape up front. WhatsApp only attaches the
+        // stream when the type is concrete; "*/*" makes it fall back to a text-only send.
+        intent.type = Variables.resolve(action.mimeType, run).trim()
+            .ifBlank { "*/*" }
+            .let { if (it == "*/*" && uris.isNotEmpty()) "application/octet-stream" else it }
+        if (body.isNotBlank()) intent.putExtra(Intent.EXTRA_TEXT, body)
+        // Without this the receiving app cannot read a URI we do not own.
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+        for ((key, value) in action.extras) {
+            intent.putExtra(key, Variables.resolve(value, run))
+        }
+
+        if (action.packageName.isNotBlank()) {
+            if (action.activityClass.isNotBlank()) {
+                intent.component = ComponentName(action.packageName, action.activityClass)
+            } else {
+                intent.setPackage(action.packageName)
+            }
+        }
+
+        startActivity(intent)
     }
 
     private suspend fun performHttp(action: ActionSpec.HttpRequest, run: RunContext) {

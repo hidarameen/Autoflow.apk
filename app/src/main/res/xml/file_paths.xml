@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Media downloaded from a bot, handed to other apps through a content:// URI. -->
+    <cache-path name="telegram_media" path="telegram/" />
+</paths>

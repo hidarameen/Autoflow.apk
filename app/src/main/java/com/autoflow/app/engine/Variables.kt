@@ -46,6 +46,9 @@ object Variables {
             "date" -> format("yyyy-MM-dd", event.timestamp)
             "datetime" -> format("yyyy-MM-dd HH:mm:ss", event.timestamp)
             "timestamp" -> event.timestamp.toString()
+            "chat_id", "chatid", "tag" -> event.tag
+            "media", "media_uri" -> event.mediaUri
+            "media_type" -> event.mediaType
             else -> context.get(name)
         }
     }

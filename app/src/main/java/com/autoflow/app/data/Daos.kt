@@ -15,6 +15,9 @@ interface RuleDao {
     @Query("SELECT * FROM rules ORDER BY createdAt DESC")
     fun observeAll(): Flow<List<Rule>>
 
+    @Query("SELECT COUNT(*) FROM rules")
+    suspend fun count(): Int
+
     @Query("SELECT * FROM rules WHERE enabled = 1")
     suspend fun enabledRules(): List<Rule>
 

@@ -11,6 +11,7 @@ import androidx.core.content.ContextCompat
 import com.autoflow.app.data.RuleRepository
 import com.autoflow.app.trigger.DeviceWatchers
 import com.autoflow.app.trigger.SystemEventReceiver
+import com.autoflow.app.trigger.TelegramBotPoller
 import com.autoflow.app.util.Notifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +30,7 @@ class AutoFlowForegroundService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val systemEvents = SystemEventReceiver()
     private var watchers: DeviceWatchers? = null
+    private var telegram: TelegramBotPoller? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -39,12 +41,15 @@ class AutoFlowForegroundService : Service() {
         registerSystemEvents()
 
         watchers = DeviceWatchers(applicationContext).also { it.start() }
+        telegram = TelegramBotPoller(applicationContext, scope)
 
         // Keep the badge honest and re-arm alarms whenever the rule set changes.
         scope.launch {
             RuleRepository.get(applicationContext).observeRules().collectLatest { rules ->
                 startForegroundWith(rules.count { it.enabled })
                 RuleEngine.syncSchedules(rules)
+                // Starts a long-poll loop per bot token, and stops loops no rule needs.
+                telegram?.sync(rules)
             }
         }
     }
@@ -74,6 +79,8 @@ class AutoFlowForegroundService : Service() {
         runCatching { unregisterReceiver(systemEvents) }
         watchers?.stop()
         watchers = null
+        telegram?.stop()
+        telegram = null
         scope.cancel()
         super.onDestroy()
     }

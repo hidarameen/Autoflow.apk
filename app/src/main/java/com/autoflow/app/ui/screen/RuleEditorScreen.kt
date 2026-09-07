@@ -1,7 +1,7 @@
 package com.autoflow.app.ui.screen
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,40 +11,32 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -63,7 +55,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.autoflow.app.data.ActionSpec
 import com.autoflow.app.data.ConditionLogic
@@ -73,10 +64,17 @@ import com.autoflow.app.data.TriggerSpec
 import com.autoflow.app.data.indentDelta
 import com.autoflow.app.data.label
 import com.autoflow.app.ui.catalog.ActionCatalog
-import com.autoflow.app.ui.catalog.ActionDef
+import com.autoflow.app.ui.catalog.ConditionCatalog
 import com.autoflow.app.ui.catalog.TriggerCatalog
-import com.autoflow.app.ui.components.AppBrandBadge
+import com.autoflow.app.ui.components.FlowConnector
+import com.autoflow.app.ui.components.Glyphs
+import com.autoflow.app.ui.components.IconBadge
+import com.autoflow.app.ui.components.PickerItem
+import com.autoflow.app.ui.components.SearchablePickerDialog
+import com.autoflow.app.ui.components.SectionCard
+import com.autoflow.app.ui.components.StepHeader
 import com.autoflow.app.ui.theme.AppColors
+import com.autoflow.app.ui.theme.LocalTokens
 import com.autoflow.app.util.InstalledApp
 import kotlinx.coroutines.flow.StateFlow
 
@@ -97,6 +95,7 @@ fun RuleEditorScreen(
 
     var trigger by remember { mutableStateOf(existing?.trigger ?: TriggerSpec.Notification()) }
     val triggerDef = remember(trigger) { TriggerCatalog.defFor(trigger) }
+    // Keyed on the definition so switching trigger type resets the field values.
     val triggerValues = remember(triggerDef.title) {
         mutableStateMapOf<String, String>().apply { putAll(triggerDef.read(trigger)) }
     }
@@ -104,16 +103,18 @@ fun RuleEditorScreen(
     val conditions = remember {
         mutableStateListOf<ConditionSpec>().apply { addAll(existing?.conditions.orEmpty()) }
     }
-    var conditionLogic by remember {
-        mutableStateOf(existing?.conditionLogic ?: ConditionLogic.ALL)
-    }
+    var conditionLogic by remember { mutableStateOf(existing?.conditionLogic ?: ConditionLogic.ALL) }
 
     val actions = remember {
         mutableStateListOf<ActionSpec>().apply { addAll(existing?.actions.orEmpty()) }
     }
+
     var editingIndex by remember { mutableStateOf<Int?>(null) }
     var showActionPicker by remember { mutableStateOf(false) }
     var showTriggerPicker by remember { mutableStateOf(false) }
+    var showAdvanced by remember { mutableStateOf(false) }
+
+    val canSave = name.isNotBlank() && actions.isNotEmpty()
 
     fun buildRule(): Rule {
         val resolvedTrigger = triggerDef.write(triggerValues.toMap())
@@ -136,12 +137,12 @@ fun RuleEditorScreen(
                 title = {
                     Column {
                         Text(
-                            if (existing == null) "New Automation Flow" else "Edit Automation",
+                            if (existing == null) "New automation" else "Edit automation",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            "Visual Flow Builder",
+                            "When → Only if → Then",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -153,19 +154,18 @@ fun RuleEditorScreen(
                     }
                 },
                 actions = {
-                    FilledTonalButton(
-                        enabled = name.isNotBlank() && actions.isNotEmpty(),
+                    Button(
                         onClick = { onSave(buildRule()) },
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
+                        enabled = canSave,
+                        shape = RoundedCornerShape(11.dp),
+                        colors = ButtonDefaults.buttonColors(
                             containerColor = AppColors.IndigoPrimary,
-                            contentColor = Color.White,
                         ),
-                        modifier = Modifier.padding(end = 8.dp),
+                        modifier = Modifier.padding(end = 12.dp),
                     ) {
-                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Save Flow", fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.Check, null, Modifier.size(17.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Save", fontWeight = FontWeight.Bold)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -178,382 +178,279 @@ fun RuleEditorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 40.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
-            // Automation Name Field
             item {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Automation Name (e.g. WhatsApp Auto-Reply)") },
-                    placeholder = { Text("Enter a descriptive name...") },
+                    label = { Text("Automation name") },
+                    placeholder = { Text("e.g. Forward Telegram to X") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    isError = name.isBlank(),
+                    supportingText = if (name.isBlank()) {
+                        { Text("Give it a name so you can find it later") }
+                    } else null,
                     shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                        focusedContainerColor = MaterialTheme.colorScheme.surface,
-                    ),
+                    modifier = Modifier.fillMaxWidth(),
                 )
+                Spacer(Modifier.height(14.dp))
             }
 
-            // ---- NODE 1: TRIGGER (WHEN) -----------------------------------
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                    ),
-                    border = BorderStroke(1.dp, AppColors.IndigoPrimary.copy(alpha = 0.3f)),
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = AppColors.IndigoPrimary,
-                                ) {
-                                    Text(
-                                        "STEP 1: WHEN",
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White,
-                                    )
-                                }
-                            }
+            // ---- Step 1: WHEN ------------------------------------------------
 
+            item {
+                SectionCard(accent = AppColors.StepWhen) {
+                    Column(Modifier.padding(14.dp)) {
+                        StepHeader(
+                            number = 1,
+                            label = "When",
+                            caption = "What starts this automation",
+                            color = AppColors.StepWhen,
+                        ) {
                             TextButton(onClick = { showTriggerPicker = true }) {
-                                Text("Change Trigger", fontWeight = FontWeight.Bold)
+                                Text("Change", fontWeight = FontWeight.Bold)
                             }
                         }
 
-                        Spacer(Modifier.height(10.dp))
+                        Spacer(Modifier.height(11.dp))
 
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            AppBrandBadge(trigger = trigger)
-                            Spacer(Modifier.width(12.dp))
-                            Column {
-                                Text(
-                                    triggerDef.title,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                                if (triggerDef.help.isNotBlank()) {
-                                    Text(
-                                        triggerDef.help,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+                        SelectedRow(
+                            icon = Glyphs.triggerIcon(triggerDef.category),
+                            tint = Glyphs.triggerTint(triggerDef.category),
+                            title = triggerDef.title,
+                            subtitle = triggerDef.help.ifBlank { triggerDef.category },
+                        )
+
+                        if (triggerDef.fields.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                                triggerDef.fields.forEach { field ->
+                                    FieldEditor(field, triggerValues, installedApps)
                                 }
                             }
                         }
                     }
                 }
+                FlowConnector(AppColors.StepWhen)
             }
 
-            items(triggerDef.fields, key = { "trigger_${it.key}" }) { field ->
-                FieldEditor(field = field, values = triggerValues, apps = installedApps)
-            }
+            // ---- Step 2: ONLY IF ---------------------------------------------
 
-            // Connecting visual connector
             item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 2.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                        modifier = Modifier.size(24.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.ArrowDownward, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                }
-            }
-
-            // ---- NODE 2: CONDITIONS (ONLY IF) ----------------------------
-            item {
-                OutlinedCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.outlinedCardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
-                    ),
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
+                SectionCard(accent = if (conditions.isEmpty()) null else AppColors.StepIf) {
+                    Column(Modifier.padding(14.dp)) {
+                        StepHeader(
+                            number = 2,
+                            label = "Only if",
+                            caption = "Optional filters",
+                            color = AppColors.StepIf,
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = AppColors.AmberWarning.copy(alpha = 0.2f),
-                                ) {
-                                    Text(
-                                        "STEP 2: ONLY IF (Optional Filters)",
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = AppColors.AmberWarning,
-                                    )
-                                }
-                            }
-
-                            FilledTonalButton(
-                                onClick = { conditions.add(ConditionSpec.Text()) },
-                                shape = RoundedCornerShape(8.dp),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                            TextButton(onClick = { conditions.add(ConditionSpec.Text()) }) {
+                                Icon(Icons.Default.Add, null, Modifier.size(16.dp))
                                 Spacer(Modifier.width(4.dp))
-                                Text("Add Filter", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Add", fontWeight = FontWeight.Bold)
                             }
                         }
 
                         if (conditions.isEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "No filters added. The flow executes unconditionally every time the trigger fires.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else if (conditions.size > 1) {
-                            Spacer(Modifier.height(8.dp))
-                            Dropdown(
-                                label = "Combine filters using",
-                                selected = conditionLogic.name,
-                                options = ConditionLogic.entries.map { it.name },
-                                onSelect = { conditionLogic = ConditionLogic.entries[it] },
-                            )
-                        }
-                    }
-                }
-            }
-
-            itemsIndexed(conditions) { index, condition ->
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                    ),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.FilterList, contentDescription = null, tint = AppColors.AmberWarning, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Filter #${index + 1}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(10.dp))
+                            HintRow("No filters — runs every time the trigger fires.")
+                        } else {
+                            if (conditions.size > 1) {
+                                Spacer(Modifier.height(11.dp))
+                                LogicToggle(conditionLogic) { conditionLogic = it }
                             }
-                            IconButton(onClick = { conditions.removeAt(index) }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Remove filter", tint = AppColors.RoseError.copy(alpha = 0.8f), modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.height(10.dp))
+                            conditions.forEachIndexed { index, condition ->
+                                FilterCard(
+                                    index = index,
+                                    condition = condition,
+                                    apps = installedApps,
+                                    onChange = { conditions[index] = it },
+                                    onRemove = { conditions.removeAt(index) },
+                                )
+                                if (index < conditions.lastIndex) Spacer(Modifier.height(8.dp))
                             }
                         }
-                        ConditionEditor(
-                            condition = condition,
-                            apps = installedApps,
-                            onChange = { conditions[index] = it },
-                        )
                     }
                 }
+                FlowConnector(AppColors.StepIf)
             }
 
-            // Connecting visual connector
+            // ---- Step 3: THEN ------------------------------------------------
+
             item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 2.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                        modifier = Modifier.size(24.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.ArrowDownward, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                }
-            }
-
-            // ---- NODE 3: ACTIONS (THEN DO) --------------------------------
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = AppColors.WhatsAppEmerald.copy(alpha = 0.15f),
-                    ) {
-                        Text(
-                            "STEP 3: THEN DO (${actions.size} Actions)",
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = AppColors.WhatsAppDark,
-                        )
-                    }
-
-                    FilledTonalButton(
-                        onClick = { showActionPicker = true },
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = AppColors.IndigoPrimary,
-                            contentColor = Color.White,
-                        ),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Add Step", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-
-            if (actions.isEmpty()) {
-                item {
-                    OutlinedCard(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
+                SectionCard(accent = if (actions.isEmpty()) null else AppColors.StepThen) {
+                    Column(Modifier.padding(14.dp)) {
+                        StepHeader(
+                            number = 3,
+                            label = "Then do",
+                            caption = if (actions.isEmpty()) {
+                                "At least one step required"
+                            } else {
+                                "${actions.size} step" + if (actions.size == 1) "" else "s"
+                            },
+                            color = AppColors.StepThen,
                         ) {
-                            Text(
-                                "No actions added yet",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                "Tap '+ Add Step' to choose what this rule will do (send WhatsApp message, click button, notify, etc.)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            )
-                        }
-                    }
-                }
-            } else {
-                itemsIndexed(actions) { index, action ->
-                    ActionRow(
-                        index = index,
-                        action = action,
-                        indent = indentAt(actions, index),
-                        canMoveUp = index > 0,
-                        canMoveDown = index < actions.lastIndex,
-                        onMoveUp = { actions.add(index - 1, actions.removeAt(index)) },
-                        onMoveDown = { actions.add(index + 1, actions.removeAt(index)) },
-                        onEdit = { editingIndex = index },
-                        onDelete = { actions.removeAt(index) },
-                    )
-                }
-            }
-
-            // ---- NODE 4: ADVANCED SETTINGS & LIMITS ------------------------
-            item {
-                Spacer(Modifier.height(8.dp))
-                OutlinedCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Tune, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Execution Settings & Limits", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                        }
-
-                        Spacer(Modifier.height(12.dp))
-
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            OutlinedTextField(
-                                value = cooldown,
-                                onValueChange = { cooldown = it.filter(Char::isDigit) },
-                                label = { Text("Cooldown (ms)") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(10.dp),
-                            )
-                            OutlinedTextField(
-                                value = dailyLimit,
-                                onValueChange = { dailyLimit = it.filter(Char::isDigit) },
-                                label = { Text("Daily Limit (0 = max)") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(10.dp),
-                            )
+                            TextButton(onClick = { showActionPicker = true }) {
+                                Icon(Icons.Default.Add, null, Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Add", fontWeight = FontWeight.Bold)
+                            }
                         }
 
                         Spacer(Modifier.height(10.dp))
 
-                        OutlinedTextField(
-                            value = notes,
-                            onValueChange = { notes = it },
-                            label = { Text("Notes / Description") },
-                            minLines = 2,
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp),
-                        )
+                        if (actions.isEmpty()) {
+                            HintRow("Add what should happen — open an app, type text, call an API…")
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                actions.forEachIndexed { index, action ->
+                                    ActionRow(
+                                        index = index,
+                                        action = action,
+                                        indent = indentAt(actions, index),
+                                        canMoveUp = index > 0,
+                                        canMoveDown = index < actions.lastIndex,
+                                        onMoveUp = { actions.add(index - 1, actions.removeAt(index)) },
+                                        onMoveDown = { actions.add(index + 1, actions.removeAt(index)) },
+                                        onEdit = { editingIndex = index },
+                                        onDelete = { actions.removeAt(index) },
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+                        VariableHint()
                     }
                 }
             }
 
+            // ---- Advanced ----------------------------------------------------
+
             item {
-                Spacer(Modifier.height(40.dp))
+                Spacer(Modifier.height(14.dp))
+                SectionCard {
+                    Column(Modifier.padding(14.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            IconBadge(Icons.Default.Tune, MaterialTheme.colorScheme.onSurfaceVariant, size = 32)
+                            Spacer(Modifier.width(11.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "Limits & notes",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    "Cooldown ${cooldown}ms" +
+                                        if ((dailyLimit.toIntOrNull() ?: 0) > 0) ", max $dailyLimit/day" else "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(onClick = { showAdvanced = !showAdvanced }) {
+                                Text(if (showAdvanced) "Hide" else "Edit", fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        if (showAdvanced) {
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = cooldown,
+                                onValueChange = { cooldown = it.filter(Char::isDigit) },
+                                label = { Text("Cooldown (ms)") },
+                                supportingText = { Text("Ignores repeat triggers inside this window") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(13.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(9.dp))
+                            OutlinedTextField(
+                                value = dailyLimit,
+                                onValueChange = { dailyLimit = it.filter(Char::isDigit) },
+                                label = { Text("Max runs per day") },
+                                supportingText = { Text("0 means unlimited") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(13.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(9.dp))
+                            OutlinedTextField(
+                                value = notes,
+                                onValueChange = { notes = it },
+                                label = { Text("Notes") },
+                                minLines = 2,
+                                shape = RoundedCornerShape(13.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (!canSave) {
+                item {
+                    Spacer(Modifier.height(12.dp))
+                    HintRow(
+                        when {
+                            name.isBlank() && actions.isEmpty() ->
+                                "Add a name and at least one step to save."
+                            name.isBlank() -> "Add a name to save."
+                            else -> "Add at least one step to save."
+                        },
+                        color = AppColors.AmberWarning,
+                    )
+                }
             }
         }
     }
 
+    // ---- Dialogs ---------------------------------------------------------
+
     if (showTriggerPicker) {
-        PickerDialog(
-            title = "Select Trigger (When)",
-            groups = TriggerCatalog.categories.map { category ->
-                category to TriggerCatalog.all.filter { it.category == category }.map { it.title }
+        SearchablePickerDialog(
+            title = "Choose a trigger",
+            items = TriggerCatalog.all.map {
+                PickerItem(
+                    title = it.title,
+                    subtitle = it.help,
+                    group = it.category,
+                    icon = Glyphs.triggerIcon(it.category),
+                    tint = Glyphs.triggerTint(it.category),
+                )
             },
             onDismiss = { showTriggerPicker = false },
-            onPick = { title ->
+            onPick = { picked ->
                 showTriggerPicker = false
-                trigger = TriggerCatalog.all.first { it.title == title }.create()
+                trigger = TriggerCatalog.all.first { it.title == picked.title }.create()
             },
         )
     }
 
     if (showActionPicker) {
-        PickerDialog(
-            title = "Add Action Step (Do)",
-            groups = ActionCatalog.categories.map { category ->
-                category to ActionCatalog.all.filter { it.category == category }.map { it.title }
+        SearchablePickerDialog(
+            title = "Add a step",
+            items = ActionCatalog.all.map {
+                PickerItem(
+                    title = it.title,
+                    subtitle = it.help,
+                    group = it.category,
+                    icon = Glyphs.actionIcon(it.category),
+                    tint = Glyphs.actionTint(it.category),
+                )
             },
             onDismiss = { showActionPicker = false },
-            onPick = { title ->
+            onPick = { picked ->
                 showActionPicker = false
-                val definition: ActionDef = ActionCatalog.all.first { it.title == title }
+                val definition = ActionCatalog.all.first { it.title == picked.title }
                 actions.add(definition.create())
+                // Steps with nothing to configure do not need the dialog.
                 if (definition.fields.isNotEmpty() || definition.create() is ActionSpec.If) {
                     editingIndex = actions.lastIndex
                 }
@@ -576,11 +473,123 @@ fun RuleEditorScreen(
     }
 }
 
-private fun indentAt(actions: List<ActionSpec>, index: Int): Int {
-    var depth = 0
-    for (i in 0 until index) depth += actions[i].indentDelta
-    if (actions[index].indentDelta < 0) depth--
-    return depth.coerceAtLeast(0)
+// ---- Pieces --------------------------------------------------------------
+
+@Composable
+private fun SelectedRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: Color,
+    title: String,
+    subtitle: String,
+) {
+    val tokens = LocalTokens.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(tokens.subtleSurface)
+            .padding(11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconBadge(icon, tint, size = 36)
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HintRow(text: String, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = color,
+        modifier = Modifier.padding(vertical = 2.dp),
+    )
+}
+
+@Composable
+private fun LogicToggle(current: ConditionLogic, onChange: (ConditionLogic) -> Unit) {
+    val tokens = LocalTokens.current
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(11.dp))
+            .background(tokens.subtleSurface)
+            .padding(3.dp),
+    ) {
+        ConditionLogic.entries.forEach { option ->
+            val selected = option == current
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(if (selected) AppColors.StepIf else Color.Transparent)
+                    .clickable(onClick = { onChange(option) })
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    if (option == ConditionLogic.ALL) "Match all" else "Match any",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FilterCard(
+    index: Int,
+    condition: ConditionSpec,
+    apps: List<InstalledApp>,
+    onChange: (ConditionSpec) -> Unit,
+    onRemove: () -> Unit,
+) {
+    val tokens = LocalTokens.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(tokens.subtleSurface)
+            .padding(11.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Default.FilterAlt, null,
+                tint = AppColors.StepIf,
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                "Filter ${index + 1}",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = AppColors.StepIf,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Default.Delete, "Remove filter",
+                    Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        ConditionEditor(condition = condition, apps = apps, onChange = onChange)
+    }
 }
 
 @Composable
@@ -595,117 +604,88 @@ private fun ActionRow(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    ElevatedCard(
+    val tokens = LocalTokens.current
+    val definition = remember(action) { ActionCatalog.defFor(action) }
+
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = (indent * 16).dp),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
+            .padding(start = (indent * 14).dp)
+            .clip(RoundedCornerShape(13.dp))
+            .background(tokens.subtleSurface)
+            .clickable(onClick = onEdit)
+            .padding(start = 10.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(26.dp)
-                    .clip(CircleShape)
-                    .background(AppColors.IndigoPrimary.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "${index + 1}",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = AppColors.IndigoPrimary,
-                )
-            }
+        Text(
+            "${index + 1}",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(16.dp),
+        )
+        IconBadge(
+            Glyphs.actionIcon(definition.category),
+            Glyphs.actionTint(definition.category),
+            size = 28,
+        )
+        Spacer(Modifier.width(9.dp))
+        Text(
+            action.label,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
 
-            Spacer(Modifier.width(10.dp))
-
-            Text(
-                action.label,
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+        IconButton(enabled = canMoveUp, onClick = onMoveUp, modifier = Modifier.size(30.dp)) {
+            Icon(Icons.Default.ArrowUpward, "Move up", Modifier.size(15.dp))
+        }
+        IconButton(enabled = canMoveDown, onClick = onMoveDown, modifier = Modifier.size(30.dp)) {
+            Icon(Icons.Default.ArrowDownward, "Move down", Modifier.size(15.dp))
+        }
+        IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
+            Icon(
+                Icons.Default.Delete, "Remove step",
+                Modifier.size(15.dp),
+                tint = AppColors.RoseError,
             )
-
-            IconButton(enabled = canMoveUp, onClick = onMoveUp, modifier = Modifier.size(28.dp)) {
-                Icon(Icons.Default.ArrowUpward, contentDescription = "Move up", modifier = Modifier.size(16.dp))
-            }
-            IconButton(enabled = canMoveDown, onClick = onMoveDown, modifier = Modifier.size(28.dp)) {
-                Icon(Icons.Default.ArrowDownward, contentDescription = "Move down", modifier = Modifier.size(16.dp))
-            }
-            IconButton(onClick = onEdit, modifier = Modifier.size(28.dp)) {
-                Icon(Icons.Default.Edit, contentDescription = "Edit step", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-            }
-            IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
-                Icon(Icons.Default.Delete, contentDescription = "Remove step", modifier = Modifier.size(16.dp), tint = AppColors.RoseError)
-            }
         }
     }
 }
 
+/** Reminds the user that message content can be injected, without opening documentation. */
 @Composable
-private fun PickerDialog(
-    title: String,
-    groups: List<Pair<String, List<String>>>,
-    onDismiss: () -> Unit,
-    onPick: (String) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", fontWeight = FontWeight.Bold) } },
-        title = {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        },
-        text = {
-            LazyColumn(Modifier.heightIn(max = 460.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                groups.forEach { (category, entries) ->
-                    item(key = "header_$category") {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 10.dp, bottom = 4.dp),
-                        ) {
-                            Text(
-                                category,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            )
-                        }
-                    }
-                    items(entries, key = { "$category/$it" }) { entry ->
-                        FilledTonalButton(
-                            onClick = { onPick(entry) },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                                contentColor = MaterialTheme.colorScheme.onSurface,
-                            ),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        ) {
-                            Text(
-                                entry,
-                                modifier = Modifier.fillMaxWidth(),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                            )
-                        }
-                    }
-                }
-            }
-        },
-    )
+private fun VariableHint() {
+    val tokens = LocalTokens.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(11.dp))
+            .background(AppColors.IndigoPrimary.copy(alpha = if (tokens.isDark) 0.13f else 0.07f))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.Bolt, null,
+            tint = AppColors.IndigoPrimary,
+            modifier = Modifier.size(14.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "Insert the message with {{text}}, {{title}}, {{app}} — " +
+                "trim it with {{text|trim:270}}.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** Indentation so If and Repeat blocks read as blocks in a flat list. */
+private fun indentAt(actions: List<ActionSpec>, index: Int): Int {
+    var depth = 0
+    for (i in 0 until index) depth += actions[i].indentDelta
+    // A closing marker lines up with the step that opened it.
+    if (actions[index].indentDelta < 0) depth--
+    return depth.coerceAtLeast(0)
 }

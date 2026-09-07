@@ -13,9 +13,9 @@ import com.autoflow.app.util.KnownPackages
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import java.util.Calendar
 
 /**
@@ -39,7 +39,26 @@ object RuleEngine {
      * UI automation drives a single physical screen, so two rules must never run at once
      * or they would fight over the foreground app.
      */
-    private val runLock = Mutex()
+    /**
+     * Serial work queue.
+     *
+     * UI automation drives one physical screen, so two rules must never interleave. A mutex
+     * alone was not enough: every trigger spawned its own coroutine and they acquired the
+     * lock in arbitrary order, so a burst of triggers ran scrambled. A single-consumer
+     * channel keeps strict arrival order and gives the queue a bounded depth, which also
+     * stops a notification storm from piling up thousands of pending runs.
+     */
+    private data class QueuedRun(
+        val rule: Rule,
+        val event: TriggerEvent,
+        val respectCooldown: Boolean,
+        val queuedAt: Long = System.currentTimeMillis(),
+    )
+
+    private val queue = Channel<QueuedRun>(capacity = QUEUE_CAPACITY)
+
+    /** Observable depth so the UI can show that work is backing up. */
+    val pending = MutableStateFlow(0)
 
     private val lastFired = mutableMapOf<Long, Long>()
 
@@ -52,6 +71,15 @@ object RuleEngine {
     @Volatile
     private var initialised = false
 
+    @Volatile
+    private var cachedRules: List<Rule> = emptyList()
+
+    @Volatile
+    private var cachedWantsScreenText = false
+
+    @Volatile
+    private var cachedWantsChatScan = false
+
     fun init(context: Context) {
         if (initialised) return
         appContext = context.applicationContext
@@ -63,26 +91,63 @@ object RuleEngine {
             runNestedRule = ::runNested,
         )
         initialised = true
+
+        // One collector keeps the hot-path cache current for the life of the process.
+        scope.launch {
+            // A destructive migration wipes the table silently, so restore before anything
+            // else observes an empty rule set.
+            runCatching { com.autoflow.app.data.RuleBackup.restoreIfEmpty(appContext, repository) }
+
+            repository.observeRules().collect { rules ->
+                cacheRules(rules)
+                com.autoflow.app.data.RuleBackup.write(appContext, rules)
+            }
+        }
+
+        // Exactly one consumer: this is what makes execution serial and ordered.
+        scope.launch {
+            for (job in queue) {
+                pending.value = (pending.value - 1).coerceAtLeast(0)
+                // A run that sat in the queue while the user kept typing is stale; drop it
+                // rather than acting on a screen that has moved on.
+                if (System.currentTimeMillis() - job.queuedAt > STALE_AFTER_MS) {
+                    repository.log(
+                        job.rule.id, job.rule.name, success = false,
+                        message = "Skipped: waited too long in the queue",
+                    )
+                    continue
+                }
+                runCatching { execute(job) }
+            }
+        }
     }
 
     /** Entry point for every trigger source. Returns immediately; work happens off-thread. */
     fun submit(event: TriggerEvent) {
         if (!initialised) return
+
+        // Accessibility events arrive dozens of times a second while a list scrolls. Reading
+        // the rules from Room on each one made the service unresponsive, and Android then
+        // disables an accessibility service that cannot keep up, so the set is cached here
+        // and refreshed only when the rules themselves change.
+        val rules = cachedRules
+        if (rules.isEmpty()) return
+        if (rules.none { it.trigger.listensTo(event.source) }) return
+
         scope.launch {
-            val rules = try {
-                repository.enabledRules()
-            } catch (error: Exception) {
-                Log.e(TAG, "could not load rules", error)
-                return@launch
-            }
-            rules.filter { matches(it, event) }.forEach { rule -> fire(rule, event) }
+            rules.filter { matches(it, event) }.forEach { rule -> enqueue(rule, event, true) }
         }
     }
+
+    /** True when any enabled rule cares about on-screen text or chat scanning. */
+    fun wantsScreenText(): Boolean = cachedWantsScreenText
+
+    fun wantsChatScan(): Boolean = cachedWantsChatScan
 
     /** Runs a rule regardless of its trigger. Used by "Run now". */
     fun runManually(rule: Rule) {
         if (!initialised) return
-        scope.launch { fire(rule, TriggerEvent.manual(), respectCooldown = false) }
+        scope.launch { enqueue(rule, TriggerEvent.manual(), respectCooldown = false) }
     }
 
     /** Called by the alarm receiver, which already knows exactly which rule to run. */
@@ -97,8 +162,15 @@ object RuleEngine {
                 val today = Calendar.getInstance().get(Calendar.DAY_OF_WEEK)
                 if (today !in trigger.days) return@launch
             }
-            fire(rule, event)
+            enqueue(rule, event, true)
         }
+    }
+
+    private fun cacheRules(rules: List<Rule>) {
+        val enabled = rules.filter { it.enabled }
+        cachedRules = enabled
+        cachedWantsScreenText = enabled.any { it.trigger is TriggerSpec.ScreenText }
+        cachedWantsChatScan = enabled.any { it.trigger is TriggerSpec.ChatMessage }
     }
 
     /** Re-registers every alarm. Called at startup and whenever rules change. */
@@ -192,6 +264,18 @@ object RuleEngine {
         TriggerSpec.BootCompleted -> event.source == TriggerEvent.Source.BOOT
         TriggerSpec.Shake -> event.source == TriggerEvent.Source.SHAKE
         TriggerSpec.QuickTile -> event.source == TriggerEvent.Source.QUICK_TILE
+        is TriggerSpec.TelegramBot ->
+            event.source == TriggerEvent.Source.TELEGRAM_BOT &&
+                (trigger.chatId.isBlank() || trigger.chatId.trim() == event.tag) &&
+                trigger.sender.matches(event.title) &&
+                trigger.text.matches(event.text)
+
+        is TriggerSpec.ChatMessage ->
+            event.source == TriggerEvent.Source.CHAT_MESSAGE &&
+                (trigger.packageNames.isEmpty() || event.packageName in trigger.packageNames) &&
+                trigger.sender.matches(event.title) &&
+                trigger.text.matches(event.text)
+
         TriggerSpec.Manual -> false
 
         is TriggerSpec.WhatsAppMessage -> {
@@ -241,7 +325,24 @@ object RuleEngine {
 
     // ---- Execution -------------------------------------------------------
 
-    private suspend fun fire(rule: Rule, event: TriggerEvent, respectCooldown: Boolean = true) {
+    private suspend fun enqueue(rule: Rule, event: TriggerEvent, respectCooldown: Boolean) {
+        val job = QueuedRun(rule, event, respectCooldown)
+        // Never block a system callback: if the queue is full the oldest work matters least.
+        val accepted = queue.trySend(job).isSuccess
+        if (accepted) {
+            pending.value = pending.value + 1
+        } else {
+            repository.log(
+                rule.id, rule.name, success = false,
+                message = "Skipped: queue full (${'$'}QUEUE_CAPACITY waiting)",
+            )
+        }
+    }
+
+    private suspend fun execute(job: QueuedRun) {
+        val rule = job.rule
+        val event = job.event
+        val respectCooldown = job.respectCooldown
         val now = System.currentTimeMillis()
 
         if (respectCooldown) {
@@ -260,7 +361,7 @@ object RuleEngine {
 
         lastFired[rule.id] = now
 
-        runLock.withLock {
+        run {
             val startedAt = System.currentTimeMillis()
             try {
                 executor.run(rule.actions, run)
@@ -322,4 +423,8 @@ object RuleEngine {
     }
 
     private const val MAX_NESTING = 5
+    private const val QUEUE_CAPACITY = 64
+
+    /** A queued run older than this is acting on a screen that has already changed. */
+    private const val STALE_AFTER_MS = 90_000L
 }

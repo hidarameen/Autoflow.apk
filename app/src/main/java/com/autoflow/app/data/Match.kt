@@ -12,6 +12,7 @@ enum class MatchMode(val display: String) {
     STARTS_WITH("starts with"),
     ENDS_WITH("ends with"),
     REGEX("matches regex"),
+    PHONE("is the phone number"),
     IS_EMPTY("is empty"),
     IS_NOT_EMPTY("is not empty"),
 }
@@ -45,6 +46,9 @@ data class MatchSpec(
         MatchMode.STARTS_WITH -> input.startsWith(value, ignoreCase)
         MatchMode.ENDS_WITH -> input.endsWith(value, ignoreCase)
         // A malformed pattern must not take the whole engine down, so it simply fails to match.
+        // Unsaved senders arrive as a formatted number, so compare digits from the right.
+        MatchMode.PHONE -> com.autoflow.app.trigger.PhoneMatch.sameNumber(input, value)
+
         MatchMode.REGEX -> runCatching {
             val options = if (ignoreCase) setOf(RegexOption.IGNORE_CASE) else emptySet()
             Regex(value, options).containsMatchIn(input)

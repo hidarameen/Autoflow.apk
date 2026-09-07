@@ -266,6 +266,47 @@ object TriggerCatalog {
         ),
 
         TriggerDef(
+            title = "A Telegram bot receives a message",
+            category = "Messaging",
+            help = "Polls the Telegram Bot API over HTTPS. Works with the screen off and " +
+                "without the Telegram app. Create the bot with @BotFather, and make it an " +
+                "admin of any channel it should read.",
+            fields = listOf(
+                FieldDef("token", "Bot token", FieldType.TEXT, "From @BotFather"),
+                FieldDef("chatId", "Chat ID", FieldType.TEXT,
+                    "Numeric id, e.g. -1001234567890. Blank = any chat. More reliable than " +
+                        "a name because it never changes."),
+                FieldDef("sender_mode", "Sender test", FieldType.ENUM,
+                    options = MatchMode.entries.map { it.name }),
+                FieldDef("sender", "Sender", FieldType.TEXT),
+                FieldDef("text_mode", "Body test", FieldType.ENUM,
+                    options = MatchMode.entries.map { it.name }),
+                FieldDef("text", "Message body", FieldType.TEXT),
+            ),
+            create = { TriggerSpec.TelegramBot() },
+            read = {
+                (it as TriggerSpec.TelegramBot).let { t ->
+                    mapOf(
+                        "token" to t.token,
+                        "chatId" to t.chatId,
+                        "sender_mode" to t.sender.mode.name,
+                        "sender" to t.sender.value,
+                        "text_mode" to t.text.mode.name,
+                        "text" to t.text.value,
+                    )
+                }
+            },
+            write = { v ->
+                TriggerSpec.TelegramBot(
+                    token = Fields.text(v, "token"),
+                    chatId = Fields.text(v, "chatId"),
+                    sender = MatchSpec(Fields.enum(v, "sender_mode", MatchMode.ANY), Fields.text(v, "sender")),
+                    text = MatchSpec(Fields.enum(v, "text_mode", MatchMode.ANY), Fields.text(v, "text")),
+                )
+            },
+        ),
+
+        TriggerDef(
             title = "An SMS arrives",
             category = "Messaging",
             fields = matchFields("from", "Sender") + matchFields("body", "Message body"),

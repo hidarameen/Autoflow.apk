@@ -1,8 +1,10 @@
 package com.autoflow.app.data
 
 import androidx.room.Entity
+import kotlinx.serialization.Serializable
 import androidx.room.PrimaryKey
 
+@Serializable
 @Entity(tableName = "rules")
 data class Rule(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
